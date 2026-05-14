@@ -47,6 +47,12 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 
+// 상단 import 추가 (기존 import들 아래에 추가)
+import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
+import android.os.PowerManager;
+
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "SYNC";
@@ -61,6 +67,10 @@ public class MainActivity extends AppCompatActivity {
     // ── 추가: MusicService 연결 ──
     private MusicService musicService;
     private boolean serviceBound = false;
+    // MainActivity 클래스 안, 기존 필드들 아래에 추가
+    private PowerManager.WakeLock wakeLock;
+    private AudioManager audioManager;
+    private AudioFocusRequest audioFocusRequest; // API 26+
 
     private final ServiceConnection serviceConnection = new ServiceConnection() {
         @Override
@@ -166,6 +176,14 @@ public class MainActivity extends AppCompatActivity {
 
         // MusicService 시작 및 바인딩
         startMusicService();
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        wakeLock = pm.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK, "SYNC:MusicWakeLock");
+        wakeLock.setReferenceCounted(false);
+        
+        // 오디오 우선권 획득
+        audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
+        requestAudioFocus();
     }
 
     // ── MusicService 시작 ──
@@ -295,28 +313,35 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onPause() {
         super.onPause();
-        // webView.onPause()는 호출하지 않음
-        // resumeTimers()로 JS 타이머/애니메이션 계속 실행
-        webView.resumeTimers();
+        // WakeLock 획득 - 백그라운드에서도 CPU 유지
+        if (wakeLock != null && !wakeLock.isHeld()) {
+            wakeLock.acquire(3 * 60 * 60 * 1000L); // 최대 3시간
+        }
+        webView.resumeTimers(); // JS 타이머 유지 (절대 onPause 호출 안함)
     }
-
+    
     @Override
     protected void onResume() {
         super.onResume();
         webView.onResume();
         webView.resumeTimers();
+        if (wakeLock != null && wakeLock.isHeld()) {
+            wakeLock.release();
+        }
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
         executor.shutdown();
-        // 서비스는 유지, WebView만 정리
+        if (wakeLock != null && wakeLock.isHeld()) {
+            wakeLock.release();
+        }
         if (serviceBound) {
             unbindService(serviceConnection);
             serviceBound = false;
-        }
-        webView.destroy();
+    }
+    webView.destroy();
     }
 
     @Override
@@ -806,5 +831,25 @@ public class MainActivity extends AppCompatActivity {
     private String readUtf8(Response resp) throws IOException {
         byte[] bytes = resp.body().bytes();
         return new String(bytes, StandardCharsets.UTF_8);
+    }
+}
+
+private void requestAudioFocus() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        audioFocusRequest = new AudioFocusRequest.Builder(
+                AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build())
+            .setOnAudioFocusChangeListener(focusChange -> {})
+            .build();
+        audioManager.requestAudioFocus(audioFocusRequest);
+    } else {
+        //noinspection deprecation
+        audioManager.requestAudioFocus(
+            null,
+            AudioManager.STREAM_MUSIC,
+            AudioManager.AUDIOFOCUS_GAIN);
     }
 }
