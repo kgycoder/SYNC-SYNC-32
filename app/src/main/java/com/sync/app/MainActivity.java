@@ -7,9 +7,13 @@ import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.pm.ActivityInfo;
 import android.graphics.Color;
+import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.os.PowerManager;
 import android.util.Base64;
 import android.util.Log;
 import android.view.View;
@@ -47,12 +51,6 @@ import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
 
-// 상단 import 추가 (기존 import들 아래에 추가)
-import android.media.AudioAttributes;
-import android.media.AudioFocusRequest;
-import android.media.AudioManager;
-import android.os.PowerManager;
-
 public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "SYNC";
@@ -64,13 +62,13 @@ public class MainActivity extends AppCompatActivity {
             .build();
     private final ExecutorService executor = Executors.newFixedThreadPool(4);
 
-    // ── 추가: MusicService 연결 ──
     private MusicService musicService;
     private boolean serviceBound = false;
-    // MainActivity 클래스 안, 기존 필드들 아래에 추가
+
+    // ── 추가된 필드 ──
     private PowerManager.WakeLock wakeLock;
     private AudioManager audioManager;
-    private AudioFocusRequest audioFocusRequest; // API 26+
+    private AudioFocusRequest audioFocusRequest;
 
     private final ServiceConnection serviceConnection = new ServiceConnection() {
         @Override
@@ -78,8 +76,6 @@ public class MainActivity extends AppCompatActivity {
             MusicService.LocalBinder lb = (MusicService.LocalBinder) binder;
             musicService = lb.getService();
             serviceBound  = true;
-
-            // 알림 버튼 → WebView JS 호출
             musicService.setCallback(new MusicService.ServiceCallback() {
                 @Override public void onPlay()  { evalJs("togglePlay()"); }
                 @Override public void onPause() { evalJs("togglePlay()"); }
@@ -142,8 +138,7 @@ public class MainActivity extends AppCompatActivity {
                 "Mozilla/5.0 (Linux; Android 14; Pixel 8) " +
                 "AppleWebKit/537.36 (KHTML, like Gecko) " +
                 "Chrome/124.0.0.0 Mobile Safari/537.36");
-                webView.resumeTimers(); // 앱 시작부터 타이머 활성화
-
+        webView.resumeTimers();
 
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         webView.setBackgroundColor(Color.parseColor("#08080D"));
@@ -174,19 +169,40 @@ public class MainActivity extends AppCompatActivity {
         webView.loadUrl(
                 "https://appassets.androidplatform.net/assets/www/index.html");
 
-        // MusicService 시작 및 바인딩
-        startMusicService();
+        // WakeLock 초기화
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         wakeLock = pm.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK, "SYNC:MusicWakeLock");
         wakeLock.setReferenceCounted(false);
-        
-        // 오디오 우선권 획득
+
+        // AudioFocus 획득
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
         requestAudioFocus();
+
+        startMusicService();
     }
 
-    // ── MusicService 시작 ──
+    // ── 오디오 포커스 요청 ──
+    private void requestAudioFocus() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioFocusRequest = new AudioFocusRequest.Builder(
+                    AudioManager.AUDIOFOCUS_GAIN)
+                .setAudioAttributes(new AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build())
+                .setOnAudioFocusChangeListener(focusChange -> {})
+                .build();
+            audioManager.requestAudioFocus(audioFocusRequest);
+        } else {
+            //noinspection deprecation
+            audioManager.requestAudioFocus(
+                null,
+                AudioManager.STREAM_MUSIC,
+                AudioManager.AUDIOFOCUS_GAIN);
+        }
+    }
+
     private void startMusicService() {
         Intent intent = new Intent(this, MusicService.class);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -205,7 +221,6 @@ public class MainActivity extends AppCompatActivity {
         stopService(new Intent(this, MusicService.class));
     }
 
-    // ── JS 실행 헬퍼 ──
     private void evalJs(String js) {
         runOnUiThread(() -> webView.evaluateJavascript(js, null));
     }
@@ -226,12 +241,11 @@ public class MainActivity extends AppCompatActivity {
                     case "orientation":
                         String orient = msg.optString("value", "sensor");
                         runOnUiThread(() -> setOrientation(orient)); break;
-                    // ── 추가: JS → 서비스로 재생 상태 전달 ──
                     case "setTitle":
-                        String title   = msg.optString("title", "");
-                        String artist  = msg.optString("artist", "");
-                        String thumbUrl= msg.optString("thumb", "");
-                        boolean playing= msg.optBoolean("playing", true);
+                        String title    = msg.optString("title", "");
+                        String artist   = msg.optString("artist", "");
+                        String thumbUrl = msg.optString("thumb", "");
+                        boolean playing = msg.optBoolean("playing", true);
                         if (serviceBound && musicService != null) {
                             musicService.updateTrack(title, artist, thumbUrl, playing);
                         }
@@ -309,17 +323,17 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // ── 앱이 백그라운드로 가도 WebView 유지 ──
     @Override
     protected void onPause() {
         super.onPause();
-        // WakeLock 획득 - 백그라운드에서도 CPU 유지
+        // WakeLock - CPU 백그라운드 유지 (최대 3시간)
         if (wakeLock != null && !wakeLock.isHeld()) {
-            wakeLock.acquire(3 * 60 * 60 * 1000L); // 최대 3시간
+            wakeLock.acquire(3 * 60 * 60 * 1000L);
         }
-        webView.resumeTimers(); // JS 타이머 유지 (절대 onPause 호출 안함)
+        // webView.onPause() 호출하지 않음 - JS 타이머 유지
+        webView.resumeTimers();
     }
-    
+
     @Override
     protected void onResume() {
         super.onResume();
@@ -337,11 +351,14 @@ public class MainActivity extends AppCompatActivity {
         if (wakeLock != null && wakeLock.isHeld()) {
             wakeLock.release();
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && audioFocusRequest != null) {
+            audioManager.abandonAudioFocusRequest(audioFocusRequest);
+        }
         if (serviceBound) {
             unbindService(serviceConnection);
             serviceBound = false;
-    }
-    webView.destroy();
+        }
+        webView.destroy();
     }
 
     @Override
@@ -350,7 +367,7 @@ public class MainActivity extends AppCompatActivity {
                 "window.__onAndroidBack && window.__onAndroidBack()", null);
     }
 
-    // ════════════ 이하 기존 코드 그대로 유지 ════════════
+    // ════════════ 이하 기존 코드 그대로 ════════════
 
     private void doSearch(JSONObject msg) {
         String query = msg.optString("query");
@@ -831,25 +848,5 @@ public class MainActivity extends AppCompatActivity {
     private String readUtf8(Response resp) throws IOException {
         byte[] bytes = resp.body().bytes();
         return new String(bytes, StandardCharsets.UTF_8);
-    }
-}
-
-private void requestAudioFocus() {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        audioFocusRequest = new AudioFocusRequest.Builder(
-                AudioManager.AUDIOFOCUS_GAIN)
-            .setAudioAttributes(new AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_MEDIA)
-                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                .build())
-            .setOnAudioFocusChangeListener(focusChange -> {})
-            .build();
-        audioManager.requestAudioFocus(audioFocusRequest);
-    } else {
-        //noinspection deprecation
-        audioManager.requestAudioFocus(
-            null,
-            AudioManager.STREAM_MUSIC,
-            AudioManager.AUDIOFOCUS_GAIN);
     }
 }
