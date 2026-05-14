@@ -243,6 +243,7 @@ public class MusicService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         // 서비스가 강제종료 후 재시작될 때 알림 유지
+        showNotification(null);
         return START_STICKY;
     }
 
