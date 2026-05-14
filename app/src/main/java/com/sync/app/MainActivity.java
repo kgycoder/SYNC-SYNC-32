@@ -132,6 +132,8 @@ public class MainActivity extends AppCompatActivity {
                 "Mozilla/5.0 (Linux; Android 14; Pixel 8) " +
                 "AppleWebKit/537.36 (KHTML, like Gecko) " +
                 "Chrome/124.0.0.0 Mobile Safari/537.36");
+                webView.resumeTimers(); // 앱 시작부터 타이머 활성화
+
 
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         webView.setBackgroundColor(Color.parseColor("#08080D"));
@@ -293,13 +295,16 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onPause() {
         super.onPause();
-        // webView.onPause() 호출 안 함 → YouTube 계속 재생
+        // webView.onPause()는 호출하지 않음
+        // resumeTimers()로 JS 타이머/애니메이션 계속 실행
+        webView.resumeTimers();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
         webView.onResume();
+        webView.resumeTimers();
     }
 
     @Override
