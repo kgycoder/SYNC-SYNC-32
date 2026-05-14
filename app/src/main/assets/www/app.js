@@ -992,7 +992,13 @@ function playTrack(t, idx = -1) {
     });
     detectMood(t.title);
     extractThumbColors(hq, md, t.title);
-    post('setTitle', { title: t.title });
+    // 서비스에 트랙 정보 + 썸네일 전달
+    post('setTitle', {
+        title: t.title,
+        artist: t.channel || '',
+        thumb: getThumbMd(t.id),
+        playing: true
+    });
     renderQueue(); openNP();
     toast(`▶  ${t.title.length > 44 ? t.title.slice(0, 44) + '…' : t.title}`);
     if (OV.active) {
@@ -1038,6 +1044,7 @@ function updPlay() {
         ? `<svg width="20" height="20" viewBox="0 0 20 20" fill="#08080d"><rect x="3" y="2.5" width="5" height="15" rx="1.5"/><rect x="12" y="2.5" width="5" height="15" rx="1.5"/></svg>`
         : `<svg width="22" height="22" viewBox="0 0 22 22" fill="#08080d"><polygon points="6,3.5 18,11 6,18.5"/></svg>`;
     _syncOvPlayBtn();
+    post('setPlayState', { playing: on });
 }
 function toggleShuf() {
     S.shuffle = !S.shuffle;
