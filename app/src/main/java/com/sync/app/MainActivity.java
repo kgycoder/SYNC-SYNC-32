@@ -323,15 +323,24 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+// 수정 후
     @Override
     protected void onPause() {
         super.onPause();
-        // WakeLock - CPU 백그라운드 유지 (최대 3시간)
         if (wakeLock != null && !wakeLock.isHeld()) {
             wakeLock.acquire(3 * 60 * 60 * 1000L);
         }
-        // webView.onPause() 호출하지 않음 - JS 타이머 유지
         webView.resumeTimers();
+    
+        // ★ 핵심 수정: YouTube가 백그라운드를 감지하지 못하도록 차단
+        // document.hidden = false, visibilityState = 'visible' 로 고정
+        webView.evaluateJavascript(
+            "(function(){" +
+            "  try{" +
+            "    Object.defineProperty(document,'hidden',{configurable:true,get:function(){return false;}});" +
+            "    Object.defineProperty(document,'visibilityState',{configurable:true,get:function(){return 'visible';}});" +
+            "  }catch(e){}" +
+            "})();", null);
     }
 
     @Override
