@@ -33,7 +33,9 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -57,6 +59,25 @@ public class MainActivity extends AppCompatActivity {
     private WebView webView;
     private WebViewAssetLoader assetLoader;
 
+    // ★ 백그라운드 재생: HTML 로드 전에 YouTube의 visibilitychange 감지를 차단하는 스크립트
+    private static final String BG_SCRIPT =
+        "<script>(function(){" +
+        "  function no(){return false;}" +
+        "  function vs(){return 'visible';}" +
+        "  Object.defineProperty(document,'hidden',{configurable:true,get:no});" +
+        "  Object.defineProperty(document,'visibilityState',{configurable:true,get:vs});" +
+        "  var _da=document.addEventListener.bind(document);" +
+        "  document.addEventListener=function(t,h,o){" +
+        "    if(t==='visibilitychange')return;" +
+        "    _da(t,h,o);" +
+        "  };" +
+        "  var _wa=window.addEventListener.bind(window);" +
+        "  window.addEventListener=function(t,h,o){" +
+        "    if(t==='visibilitychange')return;" +
+        "    _wa(t,h,o);" +
+        "  };" +
+        "})();</script>";
+
     private final OkHttpClient http = new OkHttpClient.Builder()
             .followRedirects(true)
             .build();
@@ -65,7 +86,6 @@ public class MainActivity extends AppCompatActivity {
     private MusicService musicService;
     private boolean serviceBound = false;
 
-    // ── 추가된 필드 ──
     private PowerManager.WakeLock wakeLock;
     private AudioManager audioManager;
     private AudioFocusRequest audioFocusRequest;
@@ -143,48 +163,29 @@ public class MainActivity extends AppCompatActivity {
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         webView.setBackgroundColor(Color.parseColor("#08080D"));
 
-        // 백그라운드에서도 WebView 렌더러를 높은 우선순위로 유지
+        // ★ 백그라운드에서도 WebView 렌더러 우선순위 유지
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             webView.setRendererPriorityPolicy(
-                WebView.RENDERER_PRIORITY_IMPORTANT, false); // false = 백그라운드에서도 우선순위 유지
+                WebView.RENDERER_PRIORITY_IMPORTANT, false);
         }
 
         webView.addJavascriptInterface(new AndroidBridge(), "AndroidBridge");
         webView.setWebChromeClient(new WebChromeClient());
 
         webView.setWebViewClient(new WebViewClient() {
-            // YouTube가 백그라운드를 감지하지 못하게 막는 스크립트
-            private final String BG_SCRIPT =
-                "<script>(function(){" +
-                "  function no(){return false;} function vs(){return 'visible';}" +
-                "  Object.defineProperty(document,'hidden',{configurable:true,get:no});" +
-                "  Object.defineProperty(document,'visibilityState',{configurable:true,get:vs});" +
-                "  var _da=document.addEventListener;" +
-                "  document.addEventListener=function(t,h,o){" +
-                "    if(t==='visibilitychange')return;" + // visibilitychange 이벤트 차단
-                "    _da.call(document,t,h,o);" +
-                "  };" +
-                "  var _wa=window.addEventListener;" +
-                "  window.addEventListener=function(t,h,o){" +
-                "    if(t==='visibilitychange')return;" +
-                "    _wa.call(window,t,h,o);" +
-                "  };" +
-                "})();</script>";
-
             @Override
             public WebResourceResponse shouldInterceptRequest(
                     WebView view, WebResourceRequest request) {
                 WebResourceResponse response =
                         assetLoader.shouldInterceptRequest(request.getUrl());
                 if (response == null) return null;
-        
-                // index.html 요청이면 스크립트를 <head> 바로 뒤에 주입
+
+                // ★ index.html 요청 시 <head> 바로 뒤에 차단 스크립트 주입
                 String path = request.getUrl().getPath();
                 if (path != null && path.endsWith("index.html")) {
                     try {
                         byte[] bytes = streamToBytes(response.getData());
                         String html = new String(bytes, StandardCharsets.UTF_8);
-                        // <head> 태그 뒤에 차단 스크립트 삽입
                         html = html.replace("<head>", "<head>" + BG_SCRIPT);
                         byte[] modified = html.getBytes(StandardCharsets.UTF_8);
                         return new WebResourceResponse(
@@ -201,30 +202,27 @@ public class MainActivity extends AppCompatActivity {
                 return new WebResourceResponse(mime, "UTF-8", response.getData());
             }
 
-                    @Override
-                    public boolean shouldOverrideUrlLoading(
-                            WebView view, WebResourceRequest request) {
-                        return false;
-                    }
+            @Override
+            public boolean shouldOverrideUrlLoading(
+                    WebView view, WebResourceRequest request) {
+                return false;
+            }
         });
 
         webView.loadUrl(
                 "https://appassets.androidplatform.net/assets/www/index.html");
 
-        // WakeLock 초기화
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         wakeLock = pm.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK, "SYNC:MusicWakeLock");
         wakeLock.setReferenceCounted(false);
 
-        // AudioFocus 획득
         audioManager = (AudioManager) getSystemService(AUDIO_SERVICE);
         requestAudioFocus();
 
         startMusicService();
     }
 
-    // ── 오디오 포커스 요청 ──
     private void requestAudioFocus() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             audioFocusRequest = new AudioFocusRequest.Builder(
@@ -365,15 +363,15 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-// 수정 후
     @Override
     protected void onPause() {
         super.onPause();
+        // WakeLock으로 CPU 유지 (최대 3시간)
         if (wakeLock != null && !wakeLock.isHeld()) {
             wakeLock.acquire(3 * 60 * 60 * 1000L);
         }
+        // ★ webView.onPause() 호출하지 않음 — JS 타이머/실행 유지
         webView.resumeTimers();
-        // ★ webView.onPause() 절대 호출하지 않음 — JS 실행 유지
     }
 
     @Override
@@ -409,7 +407,16 @@ public class MainActivity extends AppCompatActivity {
                 "window.__onAndroidBack && window.__onAndroidBack()", null);
     }
 
-    // ════════════ 이하 기존 코드 그대로 ════════════
+    // ★ InputStream을 byte[]로 읽는 헬퍼 (HTML 주입에 사용)
+    private byte[] streamToBytes(InputStream is) throws IOException {
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        byte[] buf = new byte[4096];
+        int n;
+        while ((n = is.read(buf)) != -1) baos.write(buf, 0, n);
+        return baos.toByteArray();
+    }
+
+    // ════════════ 검색/가사 로직 ════════════
 
     private void doSearch(JSONObject msg) {
         String query = msg.optString("query");
@@ -891,13 +898,4 @@ public class MainActivity extends AppCompatActivity {
         byte[] bytes = resp.body().bytes();
         return new String(bytes, StandardCharsets.UTF_8);
     }
-}
-
-// InputStream을 byte[]로 읽는 헬퍼 (HTML 주입에 사용)
-private byte[] streamToBytes(java.io.InputStream is) throws IOException {
-    java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-    byte[] buf = new byte[4096];
-    int n;
-    while ((n = is.read(buf)) != -1) baos.write(buf, 0, n);
-    return baos.toByteArray();
 }
