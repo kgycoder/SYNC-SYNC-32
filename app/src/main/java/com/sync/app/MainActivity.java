@@ -143,63 +143,20 @@ public class MainActivity extends AppCompatActivity {
         webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
         webView.setBackgroundColor(Color.parseColor("#08080D"));
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                webView.setRendererPriorityPolicy(
-                    WebView.RENDERER_PRIORITY_IMPORTANT, false); // false = 백그라운드에서도 우선순위 유지
-
-        }
-
         webView.addJavascriptInterface(new AndroidBridge(), "AndroidBridge");
         webView.setWebChromeClient(new WebChromeClient());
 
-webView.setWebViewClient(new WebViewClient() {
-    // YouTube가 백그라운드를 감지하지 못하게 막는 스크립트
-    private final String BG_SCRIPT =
-        "<script>(function(){" +
-        "  function no(){return false;} function vs(){return 'visible';}" +
-        "  Object.defineProperty(document,'hidden',{configurable:true,get:no});" +
-        "  Object.defineProperty(document,'visibilityState',{configurable:true,get:vs});" +
-        "  var _da=document.addEventListener;" +
-        "  document.addEventListener=function(t,h,o){" +
-        "    if(t==='visibilitychange')return;" + // visibilitychange 이벤트 차단
-        "    _da.call(document,t,h,o);" +
-        "  };" +
-        "  var _wa=window.addEventListener;" +
-        "  window.addEventListener=function(t,h,o){" +
-        "    if(t==='visibilitychange')return;" +
-        "    _wa.call(window,t,h,o);" +
-        "  };" +
-        "})();</script>";
-
-    @Override
-    public WebResourceResponse shouldInterceptRequest(
-            WebView view, WebResourceRequest request) {
-        WebResourceResponse response =
-                assetLoader.shouldInterceptRequest(request.getUrl());
-        if (response == null) return null;
-
-        // index.html 요청이면 스크립트를 <head> 바로 뒤에 주입
-        String path = request.getUrl().getPath();
-        if (path != null && path.endsWith("index.html")) {
-            try {
-                byte[] bytes = streamToBytes(response.getData());
-                String html = new String(bytes, StandardCharsets.UTF_8);
-                // <head> 태그 뒤에 차단 스크립트 삽입
-                html = html.replace("<head>", "<head>" + BG_SCRIPT);
-                byte[] modified = html.getBytes(StandardCharsets.UTF_8);
-                return new WebResourceResponse(
-                    "text/html", "UTF-8",
-                    new java.io.ByteArrayInputStream(modified));
-            } catch (Exception e) {
-                Log.e(TAG, "HTML inject failed", e);
-            }
-        }
-
-        String mime = response.getMimeType();
-        if (mime == null) mime = "text/plain";
-        if (mime.contains(";")) mime = mime.substring(0, mime.indexOf(";")).trim();
-        return new WebResourceResponse(mime, "UTF-8", response.getData());
-    }urn new WebResourceResponse(mime, "UTF-8", response.getData());
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public WebResourceResponse shouldInterceptRequest(
+                    WebView view, WebResourceRequest request) {
+                WebResourceResponse response =
+                        assetLoader.shouldInterceptRequest(request.getUrl());
+                if (response == null) return null;
+                String mime = response.getMimeType();
+                if (mime == null) mime = "text/plain";
+                if (mime.contains(";")) mime = mime.substring(0, mime.indexOf(";")).trim();
+                return new WebResourceResponse(mime, "UTF-8", response.getData());
             }
 
             @Override
@@ -374,6 +331,16 @@ webView.setWebViewClient(new WebViewClient() {
             wakeLock.acquire(3 * 60 * 60 * 1000L);
         }
         webView.resumeTimers();
+    
+        // ★ 핵심 수정: YouTube가 백그라운드를 감지하지 못하도록 차단
+        // document.hidden = false, visibilityState = 'visible' 로 고정
+        webView.evaluateJavascript(
+            "(function(){" +
+            "  try{" +
+            "    Object.defineProperty(document,'hidden',{configurable:true,get:function(){return false;}});" +
+            "    Object.defineProperty(document,'visibilityState',{configurable:true,get:function(){return 'visible';}});" +
+            "  }catch(e){}" +
+            "})();", null);
     }
 
     @Override
@@ -891,13 +858,4 @@ webView.setWebViewClient(new WebViewClient() {
         byte[] bytes = resp.body().bytes();
         return new String(bytes, StandardCharsets.UTF_8);
     }
-}
-
-// InputStream을 byte[]로 읽는 헬퍼 (HTML 주입에 사용)
-private byte[] streamToBytes(java.io.InputStream is) throws IOException {
-    java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-    byte[] buf = new byte[4096];
-    int n;
-    while ((n = is.read(buf)) != -1) baos.write(buf, 0, n);
-    return baos.toByteArray();
 }
