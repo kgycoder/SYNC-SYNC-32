@@ -750,6 +750,9 @@ const S = {
     ytReady: false, ytPlayer: null, ticker: null
 };
 
+let _userPaused = false;
+let _bgResumeTimer = null;
+
 /* ════════════════════════════════════════════
    BAR VISIBILITY
 ════════════════════════════════════════════ */
@@ -798,6 +801,8 @@ async function initYt() {
 function onYtSt(e) {
     const P = YT.PlayerState;
     if (e.data === P.PLAYING) {
+        _userPaused = false;
+        clearTimeout(_bgResumeTimer);
         S.playing = true; BG.playing = true; updPlay(); startTick();
         document.getElementById('vizz').classList.remove('off');
         document.getElementById('b-art').classList.add('glow');
@@ -808,6 +813,16 @@ function onYtSt(e) {
         if (S.echo > 0) setEcho(S.echo);
         startBeatTimer((MOODS[_curMood] || MOODS.default).bpm);
     } else if (e.data === P.PAUSED) {
+        // ★ 핵심: 사용자가 멈추지 않았으면 = 백그라운드 자동 감지로 인한 일시정지
+        if (!_userPaused && S.track) {
+            clearTimeout(_bgResumeTimer);
+            _bgResumeTimer = setTimeout(() => {
+                if (!_userPaused && S.track) {
+                    try { S.ytPlayer.playVideo(); } catch (_) {}
+                }
+            }, 600);
+            return; // UI 업데이트 건너뜀 (실제 멈춤이 아니므로)
+        }
         S.playing = false; BG.playing = false; updPlay(); stopTick(); stopBeatTimer();
         document.getElementById('vizz').classList.add('off');
         document.getElementById('b-art').classList.remove('glow');
@@ -815,6 +830,7 @@ function onYtSt(e) {
         document.getElementById('np-pulse').style.display = 'none';
         clearInterval(_echoTimer);
     } else if (e.data === P.ENDED) {
+        clearTimeout(_bgResumeTimer);
         clearInterval(_echoTimer); stopBeatTimer();
         if (S.repeat === 2) { S.ytPlayer.seekTo(0); S.ytPlayer.playVideo(); }
         else if (S.repeat === 1 || S.idx < S.q.length - 1) nextT();
@@ -1021,8 +1037,14 @@ function playTrack(t, idx = -1) {
 
 function togglePlay() {
     if (!S.ytPlayer || !S.ytReady) return;
-    if (S.playing) S.ytPlayer.pauseVideo();
-    else { if (S.track) S.ytPlayer.playVideo(); else toast('🎵 먼저 음악을 검색하세요'); }
+    if (S.playing) {
+        _userPaused = true;  // ★ 사용자가 직접 멈춤으로 표시
+        S.ytPlayer.pauseVideo();
+    } else {
+        _userPaused = false; // ★ 사용자가 직접 재생
+        if (S.track) S.ytPlayer.playVideo();
+        else toast('🎵 먼저 음악을 검색하세요');
+    }
 }
 function nextT() {
     if (!S.q.length) return;
